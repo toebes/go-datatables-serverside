@@ -266,7 +266,11 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 		return
 	}
 	for field, value := range r.Form {
+		// Remember that HTML sends us an array of values, but for datatables we only have one entry so we
+		// we can shortcut and take the first element (which will be the only element) of the field.
 		val0 := value[0]
+		// Split out on the [ into pieces so we can see what the name is.  Note that we will have another
+		// routine split out remainder of the string.
 		nameparts := strings.Split(field, "[")
 		switch nameparts[0] {
 		case "draw":
@@ -289,6 +293,8 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 		case "order":
 			index, elem, _, err := parseParts(field, nameparts)
 			if err == nil {
+				// Make sure there is a spot to store this one.  Note that we may see
+				// order[3][column] before we see order[0][dir]
 				for len(res.Order) < index {
 					res.Order = append(res.Order, OrderInfo{})
 				}
@@ -296,10 +302,9 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 				case "column":
 					res.Order[index-1].ColNum, err = strconv.Atoi(val0)
 				case "dir":
+					res.Order[index-1].Direction = Asc
 					if val0 == "desc" {
 						res.Order[index-1].Direction = Desc
-					} else {
-						res.Order[index-1].Direction = Asc
 					}
 				}
 			}
@@ -308,6 +313,8 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 			// First make sure we have a valid column number to work against
 			if err == nil {
 				// Fill up the slice to get to the spot where it is going
+				// because the columns may come out of order.. I.e. we may see
+				// columns[4][search][value] before we see columns[0][data]
 				for len(res.Columns) < index {
 					res.Columns = append(res.Columns, ColData{})
 				}
@@ -330,6 +337,10 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 					res.Columns[index-1].UseRegex = (val0 != "false")
 				}
 			}
+		}
+		// Any errors along the way and we get out.
+		if err != nil {
+			return
 		}
 	}
 	// If no Draw was specified in the request, then this isn't a datatables request and we can safely ignore it
