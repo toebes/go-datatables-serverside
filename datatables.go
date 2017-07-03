@@ -1,6 +1,7 @@
 package datatablessrv
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -31,6 +32,9 @@ import (
 // This package handles the server side processing of an AJAX request for DataTables
 // For details on the parameters and the results, read the datatables documentation at
 // https://datatables.net/manual/server-side
+
+// ErrNotDataTablesReq indicates that this is not being requested by Datatables
+var ErrNotDataTablesReq = errors.New("Not a DataTables request")
 
 // SortDir is the direction of the sort (ascending/descending)
 type SortDir int
@@ -66,7 +70,7 @@ type ColData struct {
 
 // DataTablesInfo is
 type DataTablesInfo struct {
-	hasFilter bool // There is a filter on the data to apply
+	hasFilter bool // Indicates there is a filter on the data to apply
 	Draw      int  // Draw counter. This is used by DataTables to ensure that the Ajax returns
 	// from server-side processing requests are drawn in sequence by DataTables
 	// (Ajax requests are asynchronous and thus can return out of sequence).
@@ -86,68 +90,69 @@ type DataTablesInfo struct {
 
 // MySQLFilter generates the filter for a mySQL query based on the request and a map of the strings
 // to the database entries.  Note if the field is searchable and we don't have a map, this generates
-// an error,
+// an error
 // It is assumed that there is a fulltext index on fields in very large tables in order to optimize
 // performance of this generated query
-// This code will generate a string of the form
-//        MATCH(field1,field2,field3) AGAINST('searchval')
-//     OR LOCATE(field1,'field1searchval')!=0
-//     OR LOCATE(field3,'field3searchval')!=0
-// If regular expressions are specified (useRegex) then it will generate a match of
-//         field1 REGEXP 'searchval'
-//      OR field1 REGEXP 'field1searchval'
-//      OR field2 REGEXP 'serchval'
-//      OR field3 REGEXP 'searchval'
-//      OR field3 REGEXP 'field3searchval'
+// We have several things that we can generate here.
+// For the global string, (in di.Searchval) with no Regex we would generate something like
+//  MATCH (field1,field2,field3) AGAINST('searchval')
+// If an individual entry has a searchval with no Regex we generate
+//  MATCH (field1) AGAINST('searchval')
+// If we have a global string with a regex, we generate
+//   field1 REGEX 'searchval' OR field2 REGEX 'searchval' OR field3 REGEX 'searchval'
+// Likewise for individual entries with a searchval we generate
+//   field1 REGEX 'searchval'
 // Note: If the searchval doesn't actually contain wildcard values (^$.*+|(){}[]?) then the search value bit is actually
 // cleared by ParseDatatablesRequest so that we never actually see it
+// NOTE: It is the responsibility of the caller to put the " WHERE " in front of the string when it
+// is non-null.  This allows the filter to be used in other situations or where it may need to be part
+// of a more complex logical operation
+// NOTE: We assume that the Searchval strings have all been escaped and quoted so that we can put in the string
+// with no potential SQL injection
 func (di *DataTablesInfo) MySQLFilter(SQLFieldMap map[string]string) (res string, err error) {
-	// If there is no filter to be applied, we are done and can skip out
+	// In the case where there is no filter at all, we can just return quickly
 	if !di.hasFilter {
 		return
 	}
 	matchfields := ""
 	extramatch := ""
 	extra := ""
-	query := ""
-	for _, coldata := range di.Columns {
-		// If this column isn't searchable, then we can just skip to the next field
-		if !coldata.Searchable {
-			continue
-		}
-		sqlName, isFound := SQLFieldMap[coldata.Data]
-		if !isFound {
-			err = fmt.Errorf("Column Data Name %v not found in SQL FieldMap", coldata.Data)
-			return
-		}
-		// Do we have a global search value to match against
-		if di.Searchval != "" {
-			// For wildcards we have to generate a REGEXP request
-			if di.UseRegex {
-				query += extra + sqlName + " REGEXP '" + di.Searchval + "'"
+	for _, colData := range di.Columns {
+		if colData.Searchable {
+			// Map the external name to the actual field in the database
+			sqlName, isFound := SQLFieldMap[colData.Data]
+			if !isFound {
+				err = fmt.Errorf("Column Data Name %v not found in SQL FieldMap", colData.Data)
+				return
+			}
+			// If we have a global search val, generate a match against the global value for this field
+			if di.Searchval != "" {
+				// For wildcards we have to generate a REGEXP request
+				if di.UseRegex {
+					res += extra + sqlName + " REGEX " + di.Searchval
+					extra = " OR "
+				} else {
+					// In the special case where we have a top level non wild card search value we want
+					// to gang all the fields together into a single match string
+					matchfields += extramatch + sqlName
+					extramatch = ","
+				}
+			}
+			// See if we have a search value specific for this individual element
+			if colData.Searchval != "" {
+				if colData.UseRegex {
+					res += extra + sqlName + " REGEX " + colData.Searchval
+				} else {
+					res += extra + "MATCH(" + sqlName + ") AGAINST(" + colData.Searchval + ")"
+				}
 				extra = " OR "
-			} else {
-				// In the non wildcard case, we gather up all the fields
-				matchfields += extramatch + sqlName
-				extramatch = ","
 			}
 		}
-		// Do we have a search value for just this field
-		if coldata.Searchval != "" {
-			// If it is a wildcard, we generate a REGEXP request
-			if coldata.UseRegex {
-				query += extra + sqlName + " REGEXP '" + coldata.Searchval + "'"
-			} else {
-				// Simple match can use the LOCATE function
-				query += extra + "LOCATE(" + sqlName + ", '" + coldata.Searchval + "') > 0"
-			}
-			extra = " OR "
-		}
 	}
-	if di.Searchval != "" && !di.UseRegex {
-		res = " MATCH(" + matchfields + ") AGAINST '" + di.Searchval + "')"
+	// See if we had any fields to put in to the main match query
+	if matchfields != "" {
+		res += extra + "MATCH(" + matchfields + ") AGAINST(" + di.Searchval + ")"
 	}
-	res += query
 	return
 }
 
@@ -158,28 +163,37 @@ func (di *DataTablesInfo) MySQLOrderby(SQLFieldMap map[string]string) (res strin
 	extra := " ORDER BY "
 	// Go through the list of requested items to order
 	for _, orderItem := range di.Order {
-		// Make sure it refers to one of the columns that was passed in
-		if orderItem.ColNum > len(di.Columns) {
-			err = fmt.Errorf("Order Column %v out of range %v", orderItem.ColNum, len(di.Columns))
+		// Make sure that the column is in range
+		if orderItem.ColNum >= len(di.Columns) {
+			err = fmt.Errorf("Datatables Request order column %v out of range %v of columns", orderItem.ColNum, len(di.Columns))
 			return
 		}
 		// Get the data for that column and figure out if the name is one of the fields that we
 		// allow in the table
-		coldata := di.Columns[orderItem.ColNum]
-		sqlName, isFound := SQLFieldMap[coldata.Data]
+		colData := di.Columns[orderItem.ColNum]
+		// Map the external name to the actual field in the database
+		sqlName, isFound := SQLFieldMap[colData.Data]
 		if !isFound {
-			err = fmt.Errorf("Column Data Name %v not found in SQL FieldMap", coldata.Data)
+			err = fmt.Errorf("Invalid datatables reuest column name %v", colData.Data)
 			return
 		}
+		// Make sure we can actually order on the column (in theory this will never happen)
+		if !colData.Orderable {
+			err = fmt.Errorf("Datatables requested ordering on non-orderable column %v", colData.Data)
+			return
+		}
+		// We have the column in the database, add it to the order by query that we are generating
+		// The first time we have " ORDER BY " in the extra string, subsequent times we get a simple ","
+		// which allows us to build up the string without backtracking to remove characters
 		res += extra + sqlName
 		if orderItem.Direction == Desc {
 			res += " DESC"
 		}
 		extra = ","
 	}
-	// If we didn't get anything to sort on then we return a simple "ORDER BY 1"
+	// If for some reason we got to the end with no columns, then we give them the order by the first item
 	if res == "" {
-		res = " ORDER BY 1"
+		res = extra + "1"
 	}
 	return
 }
@@ -291,13 +305,14 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 			}
 		case "columns":
 			index, elem, elem2, err := parseParts(field, nameparts)
-			// First make sure we have a
+			// First make sure we have a valid column number to work against
 			if err == nil {
+				// Fill up the slice to get to the spot where it is going
 				for len(res.Columns) < index {
 					res.Columns = append(res.Columns, ColData{})
 				}
-
 			}
+			// Now fill in the field in the column slice
 			switch elem {
 			case "data":
 				res.Columns[index-1].Data = val0
@@ -320,28 +335,34 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 	// If no Draw was specified in the request, then this isn't a datatables request and we can safely ignore it
 	if !foundDraw {
 		res = nil
-		err = fmt.Errorf("Not a DataTables request")
-	}
-	res.hasFilter = false
-	// We have a valid datatables request, do a tiny bit of optimization. If they requested a wild card
-	// but the searchval doesn't have a wild card in it, then we can optimize it to just use regular
-	// searching (which will be significantly faster)
-	// These are the possible wildcard values (^$.*+|(){}[]?) then the search value bit is actually
-	if res.Searchval != "" {
-		res.hasFilter = true
-		if res.UseRegex && !strings.ContainsAny(res.Searchval, "^$.*+|(){}[]?") {
-			res.UseRegex = false
-		}
-	}
-	// Check whether any of the columns have searchable data
-	for _, coldata := range res.Columns {
-		// If this column is searchable check to make sure it contains something
-		if coldata.Searchable && coldata.Searchval != "" {
-			// There is something, so we do have a filter
+		err = errors.New("Not a DataTables request")
+	} else {
+		// We have a valid datatables request.  See if we actually have any filtering
+		res.hasFilter = false
+		// Check the global search value to see if it has anything on it
+		if res.Searchval != "" {
+			// We do have a filter so note that for later
 			res.hasFilter = true
-			// See if this filter is worthy of a regular expression
-			if coldata.UseRegex && !strings.ContainsAny(coldata.Searchval, "^$.*+|(){}[]?") {
-				coldata.UseRegex = false
+			// If they ask for a regex but don't use any regular expressions, then turn off regex for efficiency
+			if res.UseRegex && !strings.ContainsAny(res.Searchval, "^$.*+|[]?") {
+				res.UseRegex = false
+			}
+			// Escape the single quotes and any escape characters and then quote the string
+			res.Searchval = strings.Replace(res.Searchval, "\\", "\\\\", -1)
+			res.Searchval = "'" + strings.Replace(res.Searchval, "'", "\\'", -1) + "'"
+		}
+		// Now we check all of the columns to see if they have search expressions
+		for _, colData := range res.Columns {
+			if colData.Searchval != "" {
+				// We have a search expression so we remember we have a filter
+				res.hasFilter = true
+				// CHeck for any regular expresion characters and turn off regex if not
+				if colData.UseRegex && !strings.ContainsAny(colData.Searchval, "[]^$.*?+") {
+					colData.UseRegex = false
+				}
+				// Escape the single quotes and any escape characters and then quote the string
+				colData.Searchval = strings.Replace(colData.Searchval, "\\", "\\\\", -1)
+				colData.Searchval = "'" + strings.Replace(colData.Searchval, "'", "\\'", -1) + "'"
 			}
 		}
 	}
