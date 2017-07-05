@@ -114,8 +114,6 @@ func (di *DataTablesInfo) MySQLFilter(SQLFieldMap map[string]string) (res string
 	if !di.hasFilter {
 		return
 	}
-	matchfields := ""
-	extramatch := ""
 	extra := ""
 	for _, colData := range di.Columns {
 		if colData.Searchable {
@@ -134,8 +132,8 @@ func (di *DataTablesInfo) MySQLFilter(SQLFieldMap map[string]string) (res string
 				} else {
 					// In the special case where we have a top level non wild card search value we want
 					// to gang all the fields together into a single match string
-					matchfields += extramatch + sqlName
-					extramatch = ","
+					res += extra + "MATCH(" + sqlName + ") AGAINST(" + di.Searchval + ")"
+					extra = " OR "
 				}
 			}
 			// See if we have a search value specific for this individual element
@@ -149,16 +147,12 @@ func (di *DataTablesInfo) MySQLFilter(SQLFieldMap map[string]string) (res string
 			}
 		}
 	}
-	// See if we had any fields to put in to the main match query
-	if matchfields != "" {
-		res += extra + "MATCH(" + matchfields + ") AGAINST(" + di.Searchval + ")"
-	}
 	return
 }
 
 // MySQLOrderby generates the order by clause for a mySQL query based on the request and a map of the strings
 // to the database entries.  Note if the field is orderable and we don't have a map, this generates
-// an error
+// an error.  The string IS prefixed by a space so that you can just append it.
 func (di *DataTablesInfo) MySQLOrderby(SQLFieldMap map[string]string) (res string, err error) {
 	extra := " ORDER BY "
 	// Go through the list of requested items to order
@@ -213,7 +207,7 @@ func parseParts(field string, nameparts []string) (index int, elem1 string, elem
 		return
 	}
 	elemRegex, err := regexp.Compile("^[a-z]+]$")
-	if err == nil {
+	if err != nil {
 		return
 	}
 	if len(nameparts) != 3 && len(nameparts) != 4 {
@@ -226,7 +220,8 @@ func parseParts(field string, nameparts []string) (index int, elem1 string, elem
 		return
 	}
 	// And parse it as a number to make sure
-	index, err = strconv.Atoi(nameparts[1])
+	numstr := strings.TrimSuffix(nameparts[1], "]")
+	index, err = strconv.Atoi(numstr)
 	if err != nil {
 		return
 	}
@@ -258,6 +253,9 @@ func parseParts(field string, nameparts []string) (index int, elem1 string, elem
 // to a datatables AJAX data request and parses the request data into
 // the DataTablesInfo structure.
 func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
+	var index int
+	var elem string
+	var elem2 string
 	foundDraw := false
 	res = &DataTablesInfo{}
 	// Let the request parst the post values into the r.Form structure
@@ -291,50 +289,50 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 				err = fmt.Errorf("Invalid search[] element %v", field)
 			}
 		case "order":
-			index, elem, _, err := parseParts(field, nameparts)
+			index, elem, _, err = parseParts(field, nameparts)
 			if err == nil {
 				// Make sure there is a spot to store this one.  Note that we may see
 				// order[3][column] before we see order[0][dir]
-				for len(res.Order) < index {
+				for len(res.Order) <= index {
 					res.Order = append(res.Order, OrderInfo{})
 				}
 				switch elem {
 				case "column":
-					res.Order[index-1].ColNum, err = strconv.Atoi(val0)
+					res.Order[index].ColNum, err = strconv.Atoi(val0)
 				case "dir":
-					res.Order[index-1].Direction = Asc
+					res.Order[index].Direction = Asc
 					if val0 == "desc" {
-						res.Order[index-1].Direction = Desc
+						res.Order[index].Direction = Desc
 					}
 				}
 			}
 		case "columns":
-			index, elem, elem2, err := parseParts(field, nameparts)
+			index, elem, elem2, err = parseParts(field, nameparts)
 			// First make sure we have a valid column number to work against
 			if err == nil {
 				// Fill up the slice to get to the spot where it is going
 				// because the columns may come out of order.. I.e. we may see
 				// columns[4][search][value] before we see columns[0][data]
-				for len(res.Columns) < index {
+				for len(res.Columns) <= index {
 					res.Columns = append(res.Columns, ColData{})
 				}
 			}
 			// Now fill in the field in the column slice
 			switch elem {
 			case "data":
-				res.Columns[index-1].Data = val0
+				res.Columns[index].Data = val0
 			case "name":
-				res.Columns[index-1].Name = val0
+				res.Columns[index].Name = val0
 			case "searchable":
-				res.Columns[index-1].Searchable = (val0 != "false")
+				res.Columns[index].Searchable = (val0 != "false")
 			case "orderable":
-				res.Columns[index-1].Orderable = (val0 != "false")
+				res.Columns[index].Orderable = (val0 != "false")
 			case "search":
 				switch elem2 {
 				case "value":
-					res.Columns[index-1].Searchval = val0
+					res.Columns[index].Searchval = val0
 				case "regex":
-					res.Columns[index-1].UseRegex = (val0 != "false")
+					res.Columns[index].UseRegex = (val0 != "false")
 				}
 			}
 		}
