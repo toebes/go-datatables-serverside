@@ -168,7 +168,7 @@ func (di *DataTablesInfo) MySQLOrderby(SQLFieldMap map[string]string) (res strin
 		// Map the external name to the actual field in the database
 		sqlName, isFound := SQLFieldMap[colData.Data]
 		if !isFound {
-			err = fmt.Errorf("Invalid datatables reuest column name %v", colData.Data)
+			err = fmt.Errorf("Invalid datatables request column name %v", colData.Data)
 			return
 		}
 		// Make sure we can actually order on the column (in theory this will never happen)
@@ -241,7 +241,7 @@ func parseParts(field string, nameparts []string) (index int, elem1 string, elem
 		// And trim off the ]
 		elem2 = strings.TrimSuffix(nameparts[3], "]")
 	}
-	// Let's sanity check and make sure they aren't returing an index that is way out of range.
+	// Let's sanity check and make sure they aren't returning an index that is way out of range.
 	// We shall assume that no more than 200 columns are being returned
 	if index > 200 || index < 0 {
 		err = defaultErr
@@ -258,7 +258,7 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 	var elem2 string
 	foundDraw := false
 	res = &DataTablesInfo{}
-	// Let the request parst the post values into the r.Form structure
+	// Let the request parse the post values into the r.Form structure
 	err = r.ParseForm()
 	if err != nil {
 		return
@@ -365,7 +365,7 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 			if colData.Searchval != "" {
 				// We have a search expression so we remember we have a filter
 				res.hasFilter = true
-				// CHeck for any regular expresion characters and turn off regex if not
+				// CHeck for any regular expression characters and turn off regex if not
 				if colData.UseRegex && !strings.ContainsAny(colData.Searchval, "[]^$.*?+") {
 					colData.UseRegex = false
 				}
