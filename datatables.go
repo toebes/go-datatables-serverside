@@ -78,9 +78,9 @@ type ColData struct {
 
 // DataTablesInfo represents all of the information that was requested by DataTables
 type DataTablesInfo struct {
-	// hasFilter Indicates there is a filter on the data to apply.  It is used to optimize generating
+	// HasFilter Indicates there is a filter on the data to apply.  It is used to optimize generating
 	// the query filters
-	hasFilter bool
+	HasFilter bool
 	// Draw counter. This is used by DataTables to ensure that the Ajax returns
 	// from server-side processing requests are drawn in sequence by DataTables
 	// (Ajax requests are asynchronous and thus can return out of sequence).
@@ -99,8 +99,10 @@ type DataTablesInfo struct {
 	//  Note that normally server-side processing scripts will not perform regular expression
 	//  searching for performance reasons on large data sets, but it is technically possible and at the discretion of your script.
 	UseRegex bool
-	Order    []OrderInfo
-	Columns  []ColData
+	// Order provides information about what columns are to be ordered in the results and which direction
+	Order []OrderInfo
+	// Columns provides a mapping of what fields are to be searched
+	Columns []ColData
 }
 
 // MySQLFilter generates the filter for a mySQL query based on the request and a map of the strings
@@ -126,7 +128,7 @@ type DataTablesInfo struct {
 // with no potential SQL injection
 func (di *DataTablesInfo) MySQLFilter(SQLFieldMap map[string]string) (res string, err error) {
 	// In the case where there is no filter at all, we can just return quickly
-	if !di.hasFilter {
+	if !di.HasFilter {
 		return
 	}
 	extra := ""
@@ -309,7 +311,7 @@ func parseParts(field string, nameparts []string) (index int, elem1 string, elem
 //       sqlPart, err = di.MySQLOrderby(sqlFields)
 //       query += sqlPart
 //
-//  At that point you have a query that you can send straight to mySQL
+// At that point you have a query that you can send straight to mySQL
 //
 func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 	var index int
@@ -406,11 +408,11 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 		err = errors.New("Not a DataTables request")
 	} else {
 		// We have a valid datatables request.  See if we actually have any filtering
-		res.hasFilter = false
+		res.HasFilter = false
 		// Check the global search value to see if it has anything on it
 		if res.Searchval != "" {
 			// We do have a filter so note that for later
-			res.hasFilter = true
+			res.HasFilter = true
 			// If they ask for a regex but don't use any regular expressions, then turn off regex for efficiency
 			if res.UseRegex && !strings.ContainsAny(res.Searchval, "^$.*+|[]?") {
 				res.UseRegex = false
@@ -423,7 +425,7 @@ func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 		for _, colData := range res.Columns {
 			if colData.Searchval != "" {
 				// We have a search expression so we remember we have a filter
-				res.hasFilter = true
+				res.HasFilter = true
 				// CHeck for any regular expression characters and turn off regex if not
 				if colData.UseRegex && !strings.ContainsAny(colData.Searchval, "[]^$.*?+") {
 					colData.UseRegex = false
