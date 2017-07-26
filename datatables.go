@@ -1,3 +1,6 @@
+// Package datatablessrv handles the server side processing of an AJAX request for DataTables
+// For details on the parameters and the results, read the datatables documentation at
+// https://datatables.net/manual/server-side
 package datatablessrv
 
 import (
@@ -29,9 +32,6 @@ import (
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// This package handles the server side processing of an AJAX request for DataTables
-// For details on the parameters and the results, read the datatables documentation at
-// https://datatables.net/manual/server-side
 
 // ErrNotDataTablesReq indicates that this is not being requested by Datatables
 var ErrNotDataTablesReq = errors.New("Not a DataTables request")
@@ -46,46 +46,61 @@ const (
 	Desc
 )
 
-// OrderInfo is
+// OrderInfo tracks the list of columns to sort by and in which direction to sort them.
 type OrderInfo struct {
-	ColNum    int // Which column to apply sorting to
+	// ColNum indicates Which column to apply sorting to (zero based index to the Columns data)
+	ColNum int
+	// Direction tells us which way to sort
 	Direction SortDir
 }
 
-// ColData is
+// ColData tracks all of the columns requested by DataTables
 type ColData struct {
-	Name string // columns[i][name] Column's name, as defined by columns.name.
-	Data string // columns[i][data] Column's data source, as defined by columns.data.
+	// columns[i][name] Column's name, as defined by columns.name.
+	Name string
+	// columns[i][data] Column's data source, as defined by columns.data.
 	// It is poss
-	Searchable bool // columns[i][searchable]	boolean	Flag to indicate if this column is searchable (true) or not (false).
+	Data string
+	// columns[i][searchable]	boolean	Flag to indicate if this column is searchable (true) or not (false).
 	// This is controlled by columns.searchable.
-	Orderable bool // columns[i][orderable] Flag to indicate if this column is orderable (true) or not (false).
+	Searchable bool
+	// columns[i][orderable] Flag to indicate if this column is orderable (true) or not (false).
 	// This is controlled by columns.orderable.
-	Searchval string // columns[i][search][value] Search value to apply to this specific column.
-	UseRegex  bool   // columns[i][search][regex]
+	Orderable bool
+	// columns[i][search][value] Search value to apply to this specific column.
+	Searchval string
+	// columns[i][search][regex]
 	// Flag to indicate if the search term for this column should be treated as regular expression (true) or not (false).
 	// As with global search, normally server-side processing scripts will not perform regular expression searching
 	// for performance reasons on large data sets, but it is technically possible and at the discretion of your script.
+	UseRegex bool
 }
 
-// DataTablesInfo is
+// DataTablesInfo represents all of the information that was requested by DataTables
 type DataTablesInfo struct {
-	hasFilter bool // Indicates there is a filter on the data to apply
-	Draw      int  // Draw counter. This is used by DataTables to ensure that the Ajax returns
+	// hasFilter Indicates there is a filter on the data to apply.  It is used to optimize generating
+	// the query filters
+	hasFilter bool
+	// Draw counter. This is used by DataTables to ensure that the Ajax returns
 	// from server-side processing requests are drawn in sequence by DataTables
 	// (Ajax requests are asynchronous and thus can return out of sequence).
 	// This is used as part of the draw return parameter (see below).
-	Start int // Paging first record indicator.
+	Draw int
+	// Start is the paging first record indicator.
 	// This is the start point in the current data set (0 index based - i.e. 0 is the first record).
-	Length int // Number of records that the table can display in the current draw.
+	Start int
+	// Length is the number of records that the table can display in the current draw.
 	// It is expected that the number of records returned will be equal to this number, unless the server has fewer records to return.
 	//  Note that this can be -1 to indicate that all records should be returned (although that negates any benefits of server-side processing!)
-	Searchval string // Global search value. To be applied to all columns which have searchable as true.
-	UseRegex  bool   //	true if the global filter should be treated as a regular expression for advanced searching.
+	Length int
+	// Searchval holds the global search value. To be applied to all columns which have searchable as true.
+	Searchval string
+	// UseRegex is true if the global filter should be treated as a regular expression for advanced searching.
 	//  Note that normally server-side processing scripts will not perform regular expression
 	//  searching for performance reasons on large data sets, but it is technically possible and at the discretion of your script.
-	Order   []OrderInfo
-	Columns []ColData
+	UseRegex bool
+	Order    []OrderInfo
+	Columns  []ColData
 }
 
 // MySQLFilter generates the filter for a mySQL query based on the request and a map of the strings
@@ -252,6 +267,50 @@ func parseParts(field string, nameparts []string) (index int, elem1 string, elem
 // ParseDatatablesRequest checks the HTTP request to see if it corresponds
 // to a datatables AJAX data request and parses the request data into
 // the DataTablesInfo structure.
+//
+// This structure can be used by MySQLFilter and MySQLOrderby to generate a
+// MySQL query to run against a database.
+//
+// For example assuming you are going to fill in a response structure to DataTables
+// such as:
+//
+//   type QueryResponse struct {
+//       DateAdded   time.Time
+//       Status      string
+//       Email       struct {
+//           Name      string
+//           Email     string
+//       }
+//   }
+//   var emailQueueFields = map[string]string{
+//       "DateAdded":          "t1.dateadded",
+//       "Status":             "t1.status",
+//       "Email.Name":         "t2.Name",
+//       "Email.Email":        "t2.Email",
+//   }
+//
+//   const baseQuery = `
+//       SELECT t1.dateadded
+//             ,t1.status
+//             ,t2.Name
+//             ,t2.Email
+//       FROM infotable t1
+//       LEFT JOIN usertable t2
+//         ON t1.key = t2.key`
+//
+//       // See if we have a where clause to add to the base query
+//       query := baseQuery
+//       sqlPart, err := di.MySQLFilter(sqlFields)
+//       // If we did have a where filter, append it.  Note that it doesn't put the " WHERE "
+//       // in front because we might be doing a boolean operation.
+//       if sqlPart != "" {
+//           query += " WHERE " + sqlPart
+//       }
+//       sqlPart, err = di.MySQLOrderby(sqlFields)
+//       query += sqlPart
+//
+//  At that point you have a query that you can send straight to mySQL
+//
 func ParseDatatablesRequest(r *http.Request) (res *DataTablesInfo, err error) {
 	var index int
 	var elem string
